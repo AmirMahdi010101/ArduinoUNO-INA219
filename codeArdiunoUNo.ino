@@ -9,7 +9,7 @@ const int chipSelect = 10;
 File myFile;
 
 unsigned long sampleNumber = 0; 
-
+unsigned long delayTime = 2500; 
 String fileNameTxt = ""; // File name to write data to
 String dataStr = ""; 
 
@@ -54,6 +54,7 @@ void setup(void)
 
 void loop(void)
 {   
+    
     dataStr = "";
     float shuntvoltage = 0;
     float busvoltage = 0;
@@ -72,7 +73,7 @@ void loop(void)
     sampleNumber++;
     
     //print data to Serial monitor
-    Serial.print("Sample #: "); Serial.println(sampleNumber);
+    Serial.print("Index: "); Serial.println(sampleNumber);
     Serial.print("Bus Voltage:   "); Serial.print(busvoltage); Serial.println(" V");
     Serial.print("Shunt Voltage: "); Serial.print(shuntvoltage); Serial.println(" mV");
     Serial.print("Load Voltage:  "); Serial.print(loadvoltage); Serial.println(" V");
@@ -102,7 +103,9 @@ void loop(void)
     {
         Serial.println("Error opening");
     }
-    delay(2500);
+    delay(delayTime);
+
+    checkSerialCommand();
 }
 
 void deleteFile()
@@ -143,4 +146,17 @@ int getLastFileNumber(File dir){
         entry.close();
     }
     return maxNumber;
+}
+
+void checkSerialCommand() {
+    while (Serial.available()) {
+        String inputString = "";
+        inputString = Serial.readStringUntil('\n');
+        inputString.trim(); 
+        
+        unsigned long newDelayTime = inputString.toInt();
+        if (newDelayTime > 0) {
+            delayTime = newDelayTime;
+        }
+    }
 }

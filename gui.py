@@ -134,11 +134,28 @@ class DataManager:
         self.temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.csv', encoding='utf-8', newline='')
         self.filename = self.temp_file.name
         self.writer = csv.writer(self.temp_file)
-        self.writer.writerow(["Index","Bus Voltage(V)", "Shunt Voltage(mV)", "Shunt Voltage(V)", "Current(mA)", "Power(mW)"])
+        self.writer.writerow(["Bus Voltage(V)", "Shunt Voltage(mV)", "Load Voltage(V)", "Current(mA)", "Power(mW)"])
         self.data_count = 0
         
     def add_data(self, values):
-        self.writer.writerow(values)
+        if isinstance(values, list):
+            while len(values) < 5:
+                values.append("")  
+            
+            self.writer.writerow(values[:5])
+        else:
+            try:
+                if isinstance(values, str) and ',' in values:
+                    parts = values.split(',')
+                    while len(parts) < 5:
+                        parts.append("")
+                    self.writer.writerow(parts[:5])
+                else:
+                    self.writer.writerow([str(values)])
+            except Exception as e:
+                print(f"Error processing data in DataManager: {e}")
+                self.writer.writerow([str(values)])
+                
         self.temp_file.flush()
         self.data_count += 1
         
@@ -158,9 +175,18 @@ class DataManager:
                 os.unlink(self.filename)
             except:
                 pass
+        
+    def __del__(self):
+        if hasattr(self, 'temp_file') and self.temp_file:
+            self.temp_file.close()
+            try:
+                os.unlink(self.filename)
+            except:
+                pass
 
 
 class SerialMonitor(QMainWindow):
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Serial Monitor")
@@ -168,7 +194,17 @@ class SerialMonitor(QMainWindow):
         self.serial_thread = None
         self.data_manager = None
         self.max_display_lines = 500
-
+        
+        self.is_waiting_for_files = False  
+        self.file_list_received = False     
+        self.is_receiving_file_data = False 
+        self.selected_file_number = None    
+        self.file_data_received = False     
+        self.temp_file_manager = None       
+        
+        self.waiting_for_new_file = False
+        self.new_file_received = False
+        
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         
@@ -181,6 +217,10 @@ class SerialMonitor(QMainWindow):
         self.auto_save_timer = QTimer()
         self.auto_save_timer.timeout.connect(self.auto_save_data)
         self.auto_save_counter = 0
+        
+        self.file_data_timer = QTimer()
+        self.file_data_timer.timeout.connect(self.check_file_data_completion)
+        self.last_data_time = 0
         
     def init_ui(self):
         main_layout = QVBoxLayout(self.central_widget)
@@ -225,11 +265,8 @@ class SerialMonitor(QMainWindow):
         
         self.auto_save_checkbox = QCheckBox("Auto-save every 100 points")
         self.auto_save_checkbox.setChecked(True)
-        # data_layout.addWidget(self.auto_save_checkbox)
-        
         save_layout.addLayout(data_layout)
         
-        # Save buttons  
         save_buttons_layout = QHBoxLayout()
         self.save_btn = QPushButton("Save to CSV")
         self.save_btn.clicked.connect(self.save_to_csv)
@@ -388,6 +425,51 @@ class SerialMonitor(QMainWindow):
             cursor.movePosition(QTextCursor.Down, QTextCursor.KeepAnchor, 100)
             cursor.removeSelectedText()
 
+        if self.waiting_for_new_file:
+            if "New file:" in line:
+                self.new_file_received = True
+                self.waiting_for_new_file = False
+                self.output_box.append(f"✅ {line}")
+                if self.auto_scroll_checkbox.isChecked():
+                    self.output_box.moveCursor(QTextCursor.End)
+            return 
+            
+        if self.is_receiving_file_data:
+            import time
+            self.last_data_time = time.time()
+            
+            if self.temp_file_manager:
+                self.temp_file_manager.add_data(line)
+            
+            if self.temp_file_manager.data_count % 10 == 0:  
+                self.output_box.append(f"📊 Receiving data... ({self.temp_file_manager.data_count} points)")
+                if self.auto_scroll_checkbox.isChecked():
+                    self.output_box.moveCursor(QTextCursor.End)
+            
+            return
+            
+        elif self.is_waiting_for_files:
+            if "Available data files:" in line:
+                self.output_box.append("\n📁 --- AVAILABLE DATA FILES --- 📁")
+                self.output_box.append(f"{line}")
+                self.file_list_received = True
+                
+                self.output_box.append("\n👉 Please enter the file number you want to select.")
+                self.output_box.append("👉 Send 'q' to return to normal mode when finished.\n")
+                
+                if self.auto_scroll_checkbox.isChecked():
+                    self.output_box.moveCursor(QTextCursor.End)
+                return
+            
+            elif self.file_list_received and any(f"[{i}]" in line for i in range(10)):
+                self.output_box.append(f"{line}")
+                if self.auto_scroll_checkbox.isChecked():
+                    self.output_box.moveCursor(QTextCursor.End)
+                return
+            
+            elif not self.file_list_received:
+                return
+
         self.output_box.append(f"{line}")
         if self.auto_scroll_checkbox.isChecked():
             self.output_box.moveCursor(QTextCursor.End)
@@ -404,8 +486,8 @@ class SerialMonitor(QMainWindow):
                         self.auto_save_counter = self.data_manager.data_count
 
                 if len(values) >= 5:
-                    self.plot_canvas.update_plot(values[3], values[4])  
-                    self.status_bar.showMessage(f"Last values: BusVoltage={values[3]}, ShuntVoltage={values[4]}")
+                    self.plot_canvas.update_plot(values[0], values[1])  
+                    self.status_bar.showMessage(f"Last values: BusVoltage={values[0]}, ShuntVoltage={values[1]}")
             except Exception as e:
                 self.output_box.append(f"Error processing data: {e}")
 
@@ -467,18 +549,155 @@ class SerialMonitor(QMainWindow):
                 self.output_box.append(f"❌ Error saving file: {e}")
                 QMessageBox.critical(self, "Save Error", f"Error saving file: {e}")
 
+    def create_temp_file_manager(self, file_number):
+        class TempFileManager:
+            def __init__(self, file_number):
+                self.file_number = file_number
+                self.temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.csv', encoding='utf-8', newline='')
+                self.filename = self.temp_file.name
+                self.writer = csv.writer(self.temp_file)
+                self.writer.writerow(["Bus Voltage(V)", "Shunt Voltage(mV)", "Load Voltage(V)", "Current(mA)", "Power(mW)"])
+                self.data_count = 0
+                
+            def add_data(self, data):
+                try:
+                    if ',' in data:
+                        values = data.strip().split(',')
+                        if len(values) >= 5:
+                            self.writer.writerow(values[:5]) 
+                        else:
+                            while len(values) < 5:
+                                values.append("")
+                            self.writer.writerow(values)
+                    else:
+                        self.writer.writerow([data])
+                    
+                    self.temp_file.flush()
+                    self.data_count += 1
+                except Exception as e:
+                    print(f"Error processing data: {e}")
+                    self.writer.writerow([data])
+                    self.temp_file.flush()
+                    self.data_count += 1
+                
+            def save_to_file(self, target_filename):
+                self.temp_file.close()
+                
+                with open(self.filename, 'r', newline='') as src_file:
+                    with open(target_filename, 'w', newline='') as dst_file:
+                        dst_file.write(src_file.read())
+                
+                return True
+                
+            def __del__(self):
+                if hasattr(self, 'temp_file') and self.temp_file:
+                    self.temp_file.close()
+                    try:
+                        os.unlink(self.filename)
+                    except:
+                        pass
+        
+        return TempFileManager(file_number)
+    
+    def check_file_data_completion(self):
+        import time
+        current_time = time.time()
+        
+        if self.is_receiving_file_data and (current_time - self.last_data_time > 3):
+            self.file_data_timer.stop()
+            self.output_box.append("\n✅ File data reception complete")
+            self.output_box.append(f"📊 Received {self.temp_file_manager.data_count} data points")
+            
+            QTimer.singleShot(500, self.prompt_save_file_data)
+            
+            self.is_receiving_file_data = False
+            self.file_data_received = True
+    
+    def prompt_save_file_data(self):
+        if self.temp_file_manager and self.temp_file_manager.data_count > 0:
+            filename, _ = QFileDialog.getSaveFileName(
+                self, 
+                f"Save File {self.selected_file_number} Data", 
+                f"file_{self.selected_file_number}_data.csv", 
+                "CSV Files (*.csv)"
+            )
+            
+            if filename:
+                try:
+                    if self.temp_file_manager.save_to_file(filename):
+                        self.output_box.append(f"✅ File data saved to: {filename}")
+                        QMessageBox.information(self, "Save Successful", f"File {self.selected_file_number} data successfully saved to {filename}")
+                except Exception as e:
+                    self.output_box.append(f"❌ Error saving file data: {e}")
+                    QMessageBox.critical(self, "Save Error", f"Error saving file data: {e}")
+            else:
+                self.output_box.append("❌ Save cancelled by user")
+        
     def send_value(self):
         text = self.send_input.text().strip()
         if self.serial_thread and text:
             self.serial_thread.write_data(text)
-            self.output_box.append(f"🔄 Sent: {text}")
+            
+            if text == "U":
+                self.clear_data()
+                self.clear_console()
+                self.output_box.append("✅ Command 'U' sent: Data and console cleared.")
+                self.output_box.append("⏳ Waiting for available data files list...")
+                self.is_waiting_for_files = True
+                self.file_list_received = False
+                self.is_receiving_file_data = False
+                self.file_data_received = False
+                self.selected_file_number = None
+                
+            elif text == "N":
+                self.waiting_for_new_file = True
+                self.clear_data()
+                self.clear_console()
+                self.output_box.append("✅ Command 'N' sent: Data and console cleared.")
+                
+            elif text == "q":
+                if self.is_receiving_file_data and self.temp_file_manager and self.temp_file_manager.data_count > 0:
+                    self.file_data_timer.stop()
+                    self.prompt_save_file_data()
+                
+                self.clear_data()
+                self.clear_console()
+                self.output_box.append("✅ Command 'q' sent: Returning to normal mode.")
+                self.is_waiting_for_files = False
+                self.file_list_received = False
+                self.is_receiving_file_data = False
+                self.file_data_received = False
+                self.selected_file_number = None
+                self.file_data_timer.stop()
+                
+            else:
+                if self.file_list_received and self.is_waiting_for_files and not self.is_receiving_file_data:
+                    try:
+                        file_number = int(text)
+                        self.output_box.append(f"🔄 Sent file number: {file_number}")
+                        self.selected_file_number = file_number
+                        self.is_receiving_file_data = True
+                        self.file_data_received = False
+                        
+                        self.temp_file_manager = self.create_temp_file_manager(file_number)
+                        
+                        import time
+                        self.last_data_time = time.time()
+                        self.file_data_timer.start(500)  
+                        
+                        self.output_box.append("⏳ Waiting for file data...")
+                    except ValueError:
+                        self.output_box.append(f"🔄 Sent: {text}")
+                else:
+                    self.output_box.append(f"🔄 Sent: {text}")
+                
             self.send_input.clear()
         else:
             if not self.serial_thread:
                 self.output_box.append("Not connected to a serial port.")
             elif not text:
                 self.output_box.append("Please enter a value to send.")
-
+                
     def closeEvent(self, event):
         try:
             self.stop_reading()
@@ -517,5 +736,6 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     window = SerialMonitor()
+    window.setWindowIcon(QIcon(r"icon/icon.ico"))
     window.show()
     sys.exit(app.exec_())

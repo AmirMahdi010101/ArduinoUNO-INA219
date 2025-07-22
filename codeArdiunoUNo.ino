@@ -5,14 +5,21 @@
 Adafruit_INA219 ina219;
 
 const int chipSelect = 10;
+const int SDCardLedPin = 2;
 const int ledPin = 3;
+
 File myFile;
 
 unsigned int lastFileNumber = 0;
 unsigned long delayTime = 2500; 
-char fileNameTxt[14] = ""; 
-char dataStr[50] = ""; // کاهش سایز بافر
-char buffer[10];      // افزایش سایز برای اعداد بزرگتر
+char fileNameTxt[20] = ""; 
+char dataStr[75] = "";
+char buffer[45];
+
+unsigned long index = 1;
+float currentTime = 0;
+
+bool SDStatus = false;
 
 void setup() 
 {
@@ -25,15 +32,16 @@ void setup()
 
     if (!SD.begin(chipSelect)) {
         Serial.println(F("SD initialization failed!"));
-        errorBlink();
+        // errorBlink();
+        SDStatus = false;
     }
     else {
         Serial.println(F("SD card initialized."));
-        
+        SDStatus = true;
         File root = SD.open("/");
         lastFileNumber = getLastFileNumber(root);
         root.close();
-        
+        lastFileNumber++;
         sprintf(fileNameTxt, "data%d.txt", lastFileNumber); 
         Serial.print(F("File: ")); Serial.println(fileNameTxt);
     }
@@ -47,8 +55,14 @@ void setup()
 
 void loop()
 {   
-    digitalWrite(ledPin, HIGH);
+    if (!SDStatus){
+        digitalWrite(SDCardLedPin, HIGH);
+    }
+    else {
+        digitalWrite(SDCardLedPin, LOW);
+    }
 
+    digitalWrite(ledPin, HIGH);
 
     dataStr[0] = '\0'; 
     float shuntvoltage = ina219.getShuntVoltage_mV();
@@ -56,44 +70,67 @@ void loop()
     float current_mA = ina219.getCurrent_mA();
     float power_mW = ina219.getPower_mW();
     float loadvoltage = busvoltage + (shuntvoltage / 1000);
-    
-    dtostrf(busvoltage, 5, 2, buffer);
-    strcat(dataStr, buffer);
-    strcat(dataStr, ",");
+    currentTime = millis() / 1000.0;
 
-    dtostrf(shuntvoltage, 5, 2, buffer);
-    strcat(dataStr, buffer);
-    strcat(dataStr, ",");
-    
-    dtostrf(loadvoltage, 5, 2, buffer);
-    strcat(dataStr, buffer);
-    strcat(dataStr, ",");
-    
-    dtostrf(current_mA, 5, 2, buffer);
-    strcat(dataStr, buffer);
-    strcat(dataStr, ",");
-    
-    dtostrf(power_mW, 5, 2, buffer);
-    strcat(dataStr, buffer);
+    if (SDStatus){
+        sprintf(buffer, "%lu", index);
+        strcat(dataStr, buffer);
+        strcat(dataStr, ",");
+
+        dtostrf(currentTime , 6, 2, buffer);
+        strcat(dataStr, buffer);
+        strcat(dataStr, ",");
+
+        dtostrf(busvoltage, 5, 2, buffer);
+        strcat(dataStr, buffer);
+        strcat(dataStr, ",");
+
+        dtostrf(shuntvoltage, 5, 2, buffer);
+        strcat(dataStr, buffer);
+        strcat(dataStr, ",");
+        
+        dtostrf(loadvoltage, 5, 2, buffer);
+        strcat(dataStr, buffer);
+        strcat(dataStr, ",");
+        
+        dtostrf(current_mA, 5, 2, buffer);
+        strcat(dataStr, buffer);
+        strcat(dataStr, ",");
+        
+        dtostrf(power_mW, 5, 2, buffer);
+        strcat(dataStr, buffer);
+        
+        writeToSD(dataStr);
+    }
     
     if (Serial) {
+        Serial.print(F("Index:         ")); Serial.println(index);
+        Serial.print(F("Relative time: ")); Serial.print(currentTime); Serial.println(F(" s"));
         Serial.print(F("Bus Voltage:   ")); Serial.print(busvoltage); Serial.println(F(" V"));
         Serial.print(F("Shunt Voltage: ")); Serial.print(shuntvoltage); Serial.println(F(" mV"));
         Serial.print(F("Load Voltage:  ")); Serial.print(loadvoltage); Serial.println(F(" V"));
         Serial.print(F("Current:       ")); Serial.print(current_mA); Serial.println(F(" mA"));
         Serial.print(F("Power:         ")); Serial.print(power_mW); Serial.println(F(" mW"));
         Serial.print(F("Data -> ")); Serial.println(dataStr);
-    }
-
-    writeToSD(dataStr);
-    if(Serial){
         Serial.println(F("------------------------------"));
     }
 
-    digitalWrite(ledPin, LOW);
+    index++;
+    
+    SDStatus = SDCardAvailable();
 
+    digitalWrite(ledPin, LOW);
+    
     checkSerialCommand();
     sleepMode(delayTime);
+    
+}
+
+bool SDCardAvailable() {
+    if (!SD.begin(chipSelect)) {
+        return false;
+    }
+    return true;
 }
 
 void writeToSD(char* data) {
@@ -156,7 +193,7 @@ void checkSerialCommand() {
     if(Serial.available()) {
         String inputString = Serial.readStringUntil('\n');
         inputString.trim();
-        
+        inputString.toUpperCase();
         long newDelayTime = inputString.toInt();
         if (newDelayTime > 0) {
             delayTime = newDelayTime;
@@ -183,7 +220,8 @@ void checkSerialCommand() {
                     {
                         String input = Serial.readStringUntil('\n');
                         input.trim();
-                        if (input.equals("q")) {
+                        input.toUpperCase();
+                        if (input.equals("Q")) {
                             waitingForInput = false;
                         }
                         else{
@@ -207,7 +245,6 @@ int freeRam() {
     return (int)&v - (__brkval == 0 ? (int)&__heap_start : (int)__brkval);
 }
 
-
 void showAvailableDataFiles() {
     Serial.println(F("Available data files:"));
 
@@ -228,7 +265,6 @@ void showAvailableDataFiles() {
     }
     root.close();
 }
-
 
 void sendFileOverSerial(const char* filename) {
     if (!SD.exists(filename)) {

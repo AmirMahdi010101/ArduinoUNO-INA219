@@ -5,18 +5,86 @@ import csv
 import os
 import tempfile
 from PyQt5.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QTextEdit, QComboBox,
+    QApplication, QWidget, QVBoxLayout, QTextEdit, QComboBox,QDialog,QTextBrowser,
     QPushButton, QCheckBox, QFileDialog, QLabel, QHBoxLayout, QLineEdit,
     QGroupBox, QGridLayout, QSplitter, QMessageBox, QMainWindow, QStatusBar,
-    QToolBar, QAction
+    QToolBar, QAction,QShortcut
 )
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer
-from PyQt5.QtGui import QTextCursor, QFont, QIcon
+from PyQt5.QtGui import QTextCursor, QFont, QIcon, QKeySequence
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-import numpy as np
 
+class HelpWindow(QDialog):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Help")
+        # self.setModal(False)  # Make it non-modal
+        self.setGeometry(100, 100, 800, 600)
+        layout = QVBoxLayout()
+        self.text_browser = QTextBrowser()
+        self.text_browser.setOpenExternalLinks(True)
+        layout.addWidget(self.text_browser)
+        self.setLayout(layout)
+        self.load_help_content()
+        
+    def show_centered(self, parent):
+        parent_geo = parent.geometry()
+        self.move(parent_geo.center() - self.rect().center())
+        self.show()   
+        
+    def load_help_content(self):
+        help_text = """
+        <h1>📘 راهنمای استفاده از Serial Monitor</h1>
+
+        <p>با استفاده از این برنامه، می‌توانید از طریق پورت سریال، دستورات مختلفی را به دستگاه ارسال کنید. دستورات به حروف کوچک و بزرگ حساس نیستند.</p>
+
+        <h2>🛠️ دستورات قابل استفاده</h2>
+        <table border="1" cellspacing="0" cellpadding="6">
+            <tr style="background-color:#e0e0e0">
+                <th>دستور</th>
+                <th>توضیح</th>
+                <th>مثال</th>
+            </tr>
+            <tr>
+                <td><code>عدد مثبت</code></td>
+                <td>تنظیم مدت زمان تاخیر (بر حسب میلی‌ثانیه)</td>
+                <td><kbd>1000</kbd></td>
+            </tr>
+            <tr>
+                <td><code>N</code></td>
+                <td>ایجاد یک فایل جدید با شماره جدید</td>
+                <td><kbd>N</kbd></td>
+            </tr>
+            <tr>
+                <td><code>U</code></td>
+                <td>نمایش لیست فایل‌ها و انتخاب فایل برای ارسال</td>
+                <td><kbd>U</kbd></td>
+            </tr>
+            <tr>
+                <td><code>Q</code></td>
+                <td>خروج از حالت انتخاب فایل (بعد از U)</td>
+                <td><kbd>Q</kbd></td>
+            </tr>
+        </table>
+
+        <h2>📄 توضیحات بیشتر</h2>
+        <ul>
+            <li>برای تنظیم تاخیر، تنها کافی است یک عدد مثبت وارد کنید (مثلاً 500 یا 1000).</li>
+            <li>با ارسال دستور <code>N</code>، فایل جدیدی با شماره افزایشی ذخیره می‌شود (مثلاً data3.txt).</li>
+            <li>با دستور <code>U</code>، لیست فایل‌های موجود نمایش داده شده و می‌توانید با وارد کردن شماره فایل، آن را از طریق پورت سریال دریافت کنید.</li>
+            <li>در حین انتخاب فایل (پس از <code>U</code>)، برای خروج از حالت انتخاب، دستور <code>Q</code> را وارد کنید.</li>
+        </ul>
+
+        <h2>💡 نکات</h2>
+        <ul>
+            <li>دستورات را می‌توانید با حروف بزرگ یا کوچک بنویسید؛ فرقی ندارد (مثلاً <code>n</code> یا <code>N</code>).</li>
+            <li>پس از هر دستور، دکمه <kbd>Send</kbd> را فشار دهید.</li>
+            <li>در صورت بروز خطا یا ارسال دستور ناصحیح، دستگاه ممکن است پاسخی ارسال نکند.</li>
+        </ul>
+        """
+        self.text_browser.setHtml(help_text)   
 
 class SerialReader(QThread):
     data_received = pyqtSignal(str)
@@ -134,7 +202,7 @@ class DataManager:
         self.temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.csv', encoding='utf-8', newline='')
         self.filename = self.temp_file.name
         self.writer = csv.writer(self.temp_file)
-        self.writer.writerow(["Bus Voltage(V)", "Shunt Voltage(mV)", "Load Voltage(V)", "Current(mA)", "Power(mW)"])
+        self.writer.writerow(["Index", "Relative time", "Bus Voltage(V)", "Shunt Voltage(mV)", "Load Voltage(V)", "Current(mA)", "Power(mW)"])
         self.data_count = 0
         
     def add_data(self, values):
@@ -357,6 +425,15 @@ class SerialMonitor(QMainWindow):
         
         self.stop_btn.setEnabled(False)
 
+        help_action1 = QShortcut(QKeySequence("F2"), self)
+        help_action1.activated.connect(self.show_help)
+        help_action2 = QShortcut(QKeySequence("ctrl+h"), self)
+        help_action2.activated.connect(self.show_help)
+
+    def show_help(self):
+        self.help_window = HelpWindow()
+        self.help_window.show_centered(self)
+        
     def refresh_ports(self):
         self.port_combo.clear()
         ports = serial.tools.list_ports.comports()
@@ -556,17 +633,17 @@ class SerialMonitor(QMainWindow):
                 self.temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.csv', encoding='utf-8', newline='')
                 self.filename = self.temp_file.name
                 self.writer = csv.writer(self.temp_file)
-                self.writer.writerow(["Bus Voltage(V)", "Shunt Voltage(mV)", "Load Voltage(V)", "Current(mA)", "Power(mW)"])
+                self.writer.writerow(["Index", "Relative time", "Bus Voltage(V)", "Shunt Voltage(mV)", "Load Voltage(V)", "Current(mA)", "Power(mW)"])
                 self.data_count = 0
                 
             def add_data(self, data):
                 try:
                     if ',' in data:
                         values = data.strip().split(',')
-                        if len(values) >= 5:
-                            self.writer.writerow(values[:5]) 
+                        if len(values) >= 7:
+                            self.writer.writerow(values[:7]) 
                         else:
-                            while len(values) < 5:
+                            while len(values) < 7:
                                 values.append("")
                             self.writer.writerow(values)
                     else:
@@ -638,7 +715,7 @@ class SerialMonitor(QMainWindow):
         if self.serial_thread and text:
             self.serial_thread.write_data(text)
             
-            if text == "U":
+            if text in ("U", "u") :
                 self.clear_data()
                 self.clear_console()
                 self.output_box.append("✅ Command 'U' sent: Data and console cleared.")
